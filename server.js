@@ -338,7 +338,7 @@ app.get('/api/orari-disponibili', async (req, res) => {
             let t = fascia[0];
             while (t + durataServizio <= fascia[1]) {
                 slotPossibili.push(t);
-                t += 20; // Granularità di 20 minuti
+                t += durataServizio; // Slot basati sulla durata del servizio
             }
         }
 
