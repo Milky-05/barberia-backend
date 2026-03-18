@@ -300,65 +300,70 @@ app.get('/api/orari-disponibili', async (req, res) => {
     if (!barbiere_id || !data) return res.status(400).json({ error: "Mancano parametri" });
 
     try {
-        // Orari di apertura in base al giorno
         const dateObj = new Date(data);
         const giorno = dateObj.getDay();
         
-        // Fasce orarie: [inizio_mattina, fine_mattina, inizio_pomeriggio, fine_pomeriggio] in minuti
         const fasce = giorno === 4
-            ? [[720, 1320]] // Giovedì: 12:00 - 22:00 (unica fascia)
-            : [[540, 720], [900, 1140]]; // Altri: 9:00-12:00, 15:00-19:00
+            ? [[720, 1320]]
+            : [[540, 720], [900, 1140]];
 
-        // Durata del servizio richiesto (default 40 min)
         let durataServizio = 40;
         if (servizio_id) {
             const servResult = await pool.query('SELECT durata_minuti FROM servizi WHERE id = $1', [servizio_id]);
             if (servResult.rows.length > 0) durataServizio = servResult.rows[0].durata_minuti;
         }
 
-        // Prendi tutti gli appuntamenti del barbiere per quel giorno con la loro durata
         const occupati = await pool.query(
             `SELECT p.ora, COALESCE(s.durata_minuti, 40) as durata 
              FROM prenotazioni p 
              LEFT JOIN servizi s ON p.servizio_id = s.id 
-             WHERE p.barbiere_id = $1 AND p.data = $2 AND p.stato = 'attivo'`,
+             WHERE p.barbiere_id = $1 AND p.data = $2 AND p.stato = 'attivo'
+             ORDER BY p.ora ASC`,
             [barbiere_id, data]
         );
 
-        // Converti appuntamenti in intervalli occupati [inizio, fine] in minuti
         const intervalliOccupati = occupati.rows.map(row => {
             const [h, m] = row.ora.split(':').map(Number);
             const inizio = h * 60 + m;
             return { inizio, fine: inizio + row.durata };
         });
 
-        // Genera tutti gli slot possibili ogni 20 minuti (granularità minima)
-        const slotPossibili = [];
+        // Costruisci gli slot disponibili partendo dagli spazi liberi
+        const disponibili = [];
+        
         for (const fascia of fasce) {
-            let t = fascia[0];
-            while (t + durataServizio <= fascia[1]) {
-                slotPossibili.push(t);
-                t += durataServizio; // Slot basati sulla durata del servizio
+            let cursore = fascia[0];
+            
+            while (cursore + durataServizio <= fascia[1]) {
+                const slotFine = cursore + durataServizio;
+                
+                // Controlla se questo slot si sovrappone con qualche appuntamento
+                const overlap = intervalliOccupati.some(occ => 
+                    cursore < occ.fine && slotFine > occ.inizio
+                );
+                
+                if (!overlap) {
+                    disponibili.push(cursore);
+                    // Salta avanti della durata del servizio (non 20 min)
+                    cursore += durataServizio;
+                } else {
+                    // Trova la fine dell'appuntamento che blocca e parti da lì
+                    const bloccante = intervalliOccupati.find(occ => 
+                        cursore < occ.fine && slotFine > occ.inizio
+                    );
+                    cursore = bloccante ? bloccante.fine : cursore + 20;
+                }
             }
         }
 
-        // Filtra slot che si sovrappongono con appuntamenti esistenti
-        const disponibili = slotPossibili.filter(slot => {
-            const slotFine = slot + durataServizio;
-            return !intervalliOccupati.some(occ => 
-                (slot < occ.fine && slotFine > occ.inizio) // Overlap check
-            );
-        });
-
         // Filtra orari passati se è oggi
-        const oggi = new Date().toISOString().split('T')[0];
         let result = disponibili;
+        const oggi = new Date().toISOString().split('T')[0];
         if (data === oggi) {
             const oraAttuale = new Date().getHours() * 60 + new Date().getMinutes();
             result = disponibili.filter(slot => slot > oraAttuale);
         }
 
-        // Converti in formato "HH:MM"
         const orariFinali = result.map(slot => {
             const h = Math.floor(slot / 60).toString().padStart(2, '0');
             const m = (slot % 60).toString().padStart(2, '0');
