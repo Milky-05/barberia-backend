@@ -356,11 +356,12 @@ app.get('/api/orari-disponibili', async (req, res) => {
             }
         }
 
-        // Filtra orari passati se è oggi
+        // Filtra orari passati se è oggi (usa ora italiana)
         let result = disponibili;
-        const oggi = new Date().toISOString().split('T')[0];
+        const adesso = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Rome' }));
+        const oggi = adesso.toISOString().split('T')[0];
         if (data === oggi) {
-            const oraAttuale = new Date().getHours() * 60 + new Date().getMinutes();
+            const oraAttuale = adesso.getHours() * 60 + adesso.getMinutes();
             result = disponibili.filter(slot => slot > oraAttuale);
         }
 
