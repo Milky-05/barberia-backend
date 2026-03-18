@@ -278,7 +278,7 @@ app.get('/api/barbieri-disponibili', async (req, res) => {
     try {
         const dateObj = new Date(data);
         const giorno_settimana = dateObj.getDay();
-        if (giorno_settimana === 0) return res.json({ messaggio: "Il negozio è chiuso di Domenica", barbieri: [] });
+        if (giorno_settimana === 0 || giorno_settimana === 1) return res.json({ messaggio: "Il negozio è chiuso di Domenica e Lunedì", barbieri: [] });
 
         const result = await pool.query(
             `SELECT b.id, b.nome FROM barbieri b
@@ -299,10 +299,11 @@ app.get('/api/orari-disponibili', async (req, res) => {
     const { barbiere_id, data } = req.query;
     if (!barbiere_id || !data) return res.status(400).json({ error: "Mancano parametri" });
 
-    const orariBase = [
-        "09:00", "09:40", "10:20", "11:00", "11:40",
-        "15:00", "15:40", "16:20", "17:00", "17:40", "18:20"
-    ];
+    const dateObj2 = new Date(data);
+    const giorno = dateObj2.getDay();
+    const orariBase = giorno === 4
+    ? ["12:00", "12:40", "13:20", "14:00", "14:40", "15:20", "16:00", "16:40", "17:20", "18:00", "18:40", "19:20", "20:00", "20:40", "21:20"]
+    : ["09:00", "09:40", "10:20", "11:00", "11:40", "15:00", "15:40", "16:20", "17:00", "17:40", "18:20"];
 
     try {
         const occupati = await pool.query(
