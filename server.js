@@ -296,33 +296,78 @@ app.get('/api/barbieri-disponibili', async (req, res) => {
 // API: ORARI DISPONIBILI
 // ==========================================
 app.get('/api/orari-disponibili', async (req, res) => {
-    const { barbiere_id, data } = req.query;
+    const { barbiere_id, data, servizio_id } = req.query;
     if (!barbiere_id || !data) return res.status(400).json({ error: "Mancano parametri" });
 
-    const dateObj2 = new Date(data);
-    const giorno = dateObj2.getDay();
-    const orariBase = giorno === 4
-    ? ["12:00", "12:40", "13:20", "14:00", "14:40", "15:20", "16:00", "16:40", "17:20", "18:00", "18:40", "19:20", "20:00", "20:40", "21:20"]
-    : ["09:00", "09:40", "10:20", "11:00", "11:40", "15:00", "15:40", "16:20", "17:00", "17:40", "18:20"];
-
     try {
+        // Orari di apertura in base al giorno
+        const dateObj = new Date(data);
+        const giorno = dateObj.getDay();
+        
+        // Fasce orarie: [inizio_mattina, fine_mattina, inizio_pomeriggio, fine_pomeriggio] in minuti
+        const fasce = giorno === 4
+            ? [[720, 1320]] // Giovedì: 12:00 - 22:00 (unica fascia)
+            : [[540, 720], [900, 1140]]; // Altri: 9:00-12:00, 15:00-19:00
+
+        // Durata del servizio richiesto (default 40 min)
+        let durataServizio = 40;
+        if (servizio_id) {
+            const servResult = await pool.query('SELECT durata_minuti FROM servizi WHERE id = $1', [servizio_id]);
+            if (servResult.rows.length > 0) durataServizio = servResult.rows[0].durata_minuti;
+        }
+
+        // Prendi tutti gli appuntamenti del barbiere per quel giorno con la loro durata
         const occupati = await pool.query(
-            "SELECT ora FROM prenotazioni WHERE barbiere_id = $1 AND data = $2 AND stato = 'attivo'",
+            `SELECT p.ora, COALESCE(s.durata_minuti, 40) as durata 
+             FROM prenotazioni p 
+             LEFT JOIN servizi s ON p.servizio_id = s.id 
+             WHERE p.barbiere_id = $1 AND p.data = $2 AND p.stato = 'attivo'`,
             [barbiere_id, data]
         );
-        const listaOccupati = occupati.rows.map(row => row.ora.split(':').slice(0, 2).join(':'));
-        let disponibili = orariBase.filter(ora => !listaOccupati.includes(ora));
 
+        // Converti appuntamenti in intervalli occupati [inizio, fine] in minuti
+        const intervalliOccupati = occupati.rows.map(row => {
+            const [h, m] = row.ora.split(':').map(Number);
+            const inizio = h * 60 + m;
+            return { inizio, fine: inizio + row.durata };
+        });
+
+        // Genera tutti gli slot possibili ogni 20 minuti (granularità minima)
+        const slotPossibili = [];
+        for (const fascia of fasce) {
+            let t = fascia[0];
+            while (t + durataServizio <= fascia[1]) {
+                slotPossibili.push(t);
+                t += 20; // Granularità di 20 minuti
+            }
+        }
+
+        // Filtra slot che si sovrappongono con appuntamenti esistenti
+        const disponibili = slotPossibili.filter(slot => {
+            const slotFine = slot + durataServizio;
+            return !intervalliOccupati.some(occ => 
+                (slot < occ.fine && slotFine > occ.inizio) // Overlap check
+            );
+        });
+
+        // Filtra orari passati se è oggi
         const oggi = new Date().toISOString().split('T')[0];
+        let result = disponibili;
         if (data === oggi) {
             const oraAttuale = new Date().getHours() * 60 + new Date().getMinutes();
-            disponibili = disponibili.filter(ora => {
-                const [h, m] = ora.split(':').map(Number);
-                return (h * 60 + m) > oraAttuale;
-            });
+            result = disponibili.filter(slot => slot > oraAttuale);
         }
-        res.json(disponibili);
+
+        // Converti in formato "HH:MM"
+        const orariFinali = result.map(slot => {
+            const h = Math.floor(slot / 60).toString().padStart(2, '0');
+            const m = (slot % 60).toString().padStart(2, '0');
+            return `${h}:${m}`;
+        });
+
+        res.json(orariFinali);
     } catch (err) {
+        console.error("Errore orari:", err);
         res.status(500).json({ error: "Errore nel recupero orari" });
     }
 });
