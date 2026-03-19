@@ -492,9 +492,9 @@ app.get('/api/admin/prenotazioni', verificaToken, soloAdmin, async (req, res) =>
 
     try {
         let query = `
-            SELECT p.id, p.data, p.ora, p.stato, p.cliente_nome,
-                    b.nome AS barbiere_nome, b.id AS barbiere_id,
-                    sv.nome AS servizio_nome, sv.prezzo AS servizio_prezzo, sv.durata_minuti
+            SELECT p.id, p.data, p.ora, p.stato, p.cliente_nome, p.servizio_id,
+             b.nome AS barbiere_nome, b.id AS barbiere_id,
+             sv.nome AS servizio_nome, sv.prezzo AS servizio_prezzo, sv.durata_minuti
              FROM prenotazioni p
              JOIN barbieri b ON p.barbiere_id = b.id
              JOIN servizi sv ON p.servizio_id = sv.id
@@ -526,9 +526,9 @@ app.get('/api/admin/prenotazioni/settimana', verificaToken, soloAdmin, async (re
 
     try {
         const result = await pool.query(
-            `SELECT p.id, p.data, p.ora, p.stato, p.cliente_nome,
-                    b.nome AS barbiere_nome, b.id AS barbiere_id,
-                    sv.nome AS servizio_nome, sv.prezzo AS servizio_prezzo, sv.durata_minuti
+            `SELECT p.id, p.data, p.ora, p.stato, p.cliente_nome, p.servizio_id,
+             b.nome AS barbiere_nome, b.id AS barbiere_id,
+             sv.nome AS servizio_nome, sv.prezzo AS servizio_prezzo, sv.durata_minuti
              FROM prenotazioni p JOIN barbieri b ON p.barbiere_id = b.id JOIN servizi sv ON p.servizio_id = sv.id
              WHERE p.sede_id = $1 AND p.data BETWEEN $2 AND $3 ORDER BY p.data ASC, p.ora ASC`,
             [sede_id, inizio.toISOString().split('T')[0], fine.toISOString().split('T')[0]]
