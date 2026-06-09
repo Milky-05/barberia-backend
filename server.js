@@ -25,15 +25,37 @@ app.listen(process.env.PORT, () => {
 // ==========================================
 // MIDDLEWARE AUTH
 // ==========================================
-const verificaToken = (req, res, next) => {
+const verificaToken = async (req, res, next) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({ error: "Accesso non autorizzato" });
     }
     try {
         const token = authHeader.split(' ')[1];
-        const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        req.utente = decoded;
+        const decoded = jwt.verify(token, process.env.SUPABASE_JWT_SECRET);
+        const uuid = decoded.sub;
+
+        const result = await pool.query(
+            `SELECT p.id, p.ruolo, p.nome, p.cognome, b.id AS barbiere_id
+             FROM profili p
+             LEFT JOIN barbieri b ON b.profilo_id = p.id
+             WHERE p.id = $1`,
+            [uuid]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(401).json({ error: "Utente non trovato" });
+        }
+
+        const u = result.rows[0];
+        req.utente = {
+            id: uuid,
+            uuid,
+            barbiere_id: u.barbiere_id,
+            nome: u.nome,
+            cognome: u.cognome,
+            ruolo: u.ruolo,
+        };
         next();
     } catch (err) {
         return res.status(401).json({ error: "Token non valido o scaduto" });
@@ -41,7 +63,7 @@ const verificaToken = (req, res, next) => {
 };
 
 const soloAdmin = (req, res, next) => {
-    if (req.utente.ruolo !== 'barbiere') {
+    if (req.utente.ruolo !== 'admin' && req.utente.ruolo !== 'super_admin') {
         return res.status(403).json({ error: "Accesso riservato ai barbieri" });
     }
     next();
@@ -399,9 +421,9 @@ app.post('/api/prenotazioni', verificaToken, async (req, res) => {
         if (check.rows.length > 0) return res.status(409).json({ error: "Questo orario è già prenotato!" });
 
         const result = await pool.query(
-            `INSERT INTO prenotazioni (sede_id, barbiere_id, cliente_nome, cliente_id, data, ora, servizio_id) 
+            `INSERT INTO prenotazioni (sede_id, barbiere_id, cliente_nome, cliente_uuid, data, ora, servizio_id)
              VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-            [sede_id, barbiere_id, cliente_nome, req.utente.ruolo === 'cliente' ? req.utente.id : null, data, ora, servizio_id]
+            [sede_id, barbiere_id, cliente_nome, req.utente.ruolo === 'cliente' ? req.utente.uuid : null, data, ora, servizio_id]
         );
         res.json({ success: true, prenotazione: result.rows[0] });
     } catch (err) {
@@ -413,14 +435,13 @@ app.post('/api/prenotazioni', verificaToken, async (req, res) => {
 // I miei appuntamenti
 app.get('/api/prenotazioni/miei', verificaToken, async (req, res) => {
     const { sede_id } = req.query;
-    const cliente_id = req.utente.id; // <-- ORA USIAMO L'ID
+    const cliente_uuid = req.utente.uuid;
 
     try {
-        // Pulizia basata sull'ID
-        await pool.query("DELETE FROM prenotazioni WHERE cliente_id = $1 AND stato = 'cancellato'", [cliente_id]);
+        await pool.query("DELETE FROM prenotazioni WHERE cliente_uuid = $1 AND stato = 'cancellato'", [cliente_uuid]);
         await pool.query(
-            "DELETE FROM prenotazioni WHERE cliente_id = $1 AND stato = 'attivo' AND (data < CURRENT_DATE OR (data = CURRENT_DATE AND ora < CURRENT_TIME))",
-            [cliente_id]
+            "DELETE FROM prenotazioni WHERE cliente_uuid = $1 AND stato = 'attivo' AND (data < CURRENT_DATE OR (data = CURRENT_DATE AND ora < CURRENT_TIME))",
+            [cliente_uuid]
         );
 
         let query = `
@@ -431,8 +452,8 @@ app.get('/api/prenotazioni/miei', verificaToken, async (req, res) => {
              JOIN sedi s ON p.sede_id = s.id
              JOIN barbieri b ON p.barbiere_id = b.id
              JOIN servizi sv ON p.servizio_id = sv.id
-             WHERE p.cliente_id = $1 AND p.stato = 'attivo'`; // <-- CERCA PER ID
-        const params = [cliente_id];
+             WHERE p.cliente_uuid = $1 AND p.stato = 'attivo'`;
+        const params = [cliente_uuid];
 
         if (sede_id) { query += ` AND p.sede_id = $2`; params.push(sede_id); }
         query += ` ORDER BY p.data ASC, p.ora ASC`;
@@ -462,8 +483,8 @@ app.delete('/api/prenotazioni/:id', verificaToken, async (req, res) => {
 app.get('/api/notifiche', verificaToken, async (req, res) => {
     try {
         const result = await pool.query(
-            'SELECT * FROM notifiche WHERE cliente_id = $1 ORDER BY created_at DESC LIMIT 20',
-            [req.utente.id] // <-- CERCA PER ID
+            'SELECT * FROM notifiche WHERE cliente_uuid = $1 ORDER BY created_at DESC LIMIT 20',
+            [req.utente.uuid]
         );
         res.json(result.rows);
     } catch (err) {
@@ -473,7 +494,7 @@ app.get('/api/notifiche', verificaToken, async (req, res) => {
 
 app.patch('/api/notifiche/lette', verificaToken, async (req, res) => {
     try {
-        await pool.query('UPDATE notifiche SET letta = true WHERE cliente_id = $1', [req.utente.id]); // <-- AGGIORNA PER ID
+        await pool.query('UPDATE notifiche SET letta = true WHERE cliente_uuid = $1', [req.utente.uuid]);
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: "Errore" });
