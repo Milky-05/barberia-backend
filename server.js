@@ -32,8 +32,20 @@ const verificaToken = async (req, res, next) => {
     }
     try {
         const token = authHeader.split(' ')[1];
-        const decoded = jwt.verify(token, process.env.SUPABASE_JWT_SECRET);
-        const uuid = decoded.sub;
+
+        const risposta = await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, {
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'apikey': process.env.SUPABASE_ANON_KEY,
+            }
+        });
+
+        if (!risposta.ok) {
+            return res.status(401).json({ error: "Token non valido o scaduto" });
+        }
+
+        const userData = await risposta.json();
+        const uuid = userData.id;
 
         const result = await pool.query(
             `SELECT p.id, p.ruolo, p.nome, p.cognome, b.id AS barbiere_id
