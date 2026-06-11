@@ -22,9 +22,12 @@ app.listen(process.env.PORT, () => {
     console.log(`Server avviato sulla porta ${process.env.PORT}`);
 });
 
-// Assicura che la colonna telefono esista in profili (idempotente)
+// Assicura che le colonne esistano (idempotente)
 pool.query("ALTER TABLE profili ADD COLUMN IF NOT EXISTS telefono TEXT").catch(err => {
-    console.log('DB init telefono:', err.message);
+    console.log('DB init profili.telefono:', err.message);
+});
+pool.query("ALTER TABLE prenotazioni ADD COLUMN IF NOT EXISTS cliente_telefono TEXT").catch(err => {
+    console.log('DB init prenotazioni.cliente_telefono:', err.message);
 });
 
 // ==========================================
@@ -617,7 +620,7 @@ app.get('/api/admin/prenotazioni', verificaToken, soloAdmin, async (req, res) =>
             SELECT p.id, p.data, p.ora, p.stato, p.cliente_nome, p.servizio_id, p.cliente_id,
              b.nome AS barbiere_nome, b.id AS barbiere_id,
              sv.nome AS servizio_nome, sv.prezzo AS servizio_prezzo, sv.durata_minuti,
-             pr.telefono AS cliente_telefono
+             COALESCE(p.cliente_telefono, pr.telefono) AS cliente_telefono
              FROM prenotazioni p
              JOIN barbieri b ON p.barbiere_id = b.id
              JOIN servizi sv ON p.servizio_id = sv.id
@@ -665,7 +668,7 @@ app.get('/api/admin/prenotazioni/settimana', verificaToken, soloAdmin, async (re
 
 // Aggiungi prenotazione (admin)
 app.post('/api/admin/prenotazioni', verificaToken, soloAdmin, async (req, res) => {
-    const { sede_id, barbiere_id, cliente_nome, data, ora, servizio_id } = req.body;
+    const { sede_id, barbiere_id, cliente_nome, cliente_telefono, data, ora, servizio_id } = req.body;
     if (!sede_id || !barbiere_id || !cliente_nome || !data || !ora || !servizio_id) {
         return res.status(400).json({ error: "Mancano campi obbligatori" });
     }
@@ -677,8 +680,8 @@ app.post('/api/admin/prenotazioni', verificaToken, soloAdmin, async (req, res) =
         if (check.rows.length > 0) return res.status(409).json({ error: "Orario già prenotato!" });
 
         const result = await pool.query(
-            `INSERT INTO prenotazioni (sede_id, barbiere_id, cliente_nome, data, ora, servizio_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-            [sede_id, barbiere_id, cliente_nome, data, ora, servizio_id]
+            `INSERT INTO prenotazioni (sede_id, barbiere_id, cliente_nome, cliente_telefono, data, ora, servizio_id) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+            [sede_id, barbiere_id, cliente_nome, cliente_telefono || null, data, ora, servizio_id]
         );
         res.json({ success: true, prenotazione: result.rows[0] });
     } catch (err) {
