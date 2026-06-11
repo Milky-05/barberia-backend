@@ -617,14 +617,14 @@ app.get('/api/admin/prenotazioni', verificaToken, soloAdmin, async (req, res) =>
 
     try {
         let query = `
-            SELECT p.id, p.data, p.ora, p.stato, p.cliente_nome, p.servizio_id, p.cliente_id,
+            SELECT p.id, p.data, p.ora, p.stato, p.cliente_nome, p.servizio_id, p.cliente_uuid,
              b.nome AS barbiere_nome, b.id AS barbiere_id,
              sv.nome AS servizio_nome, sv.prezzo AS servizio_prezzo, sv.durata_minuti,
              COALESCE(p.cliente_telefono, pr.telefono) AS cliente_telefono
              FROM prenotazioni p
              JOIN barbieri b ON p.barbiere_id = b.id
              JOIN servizi sv ON p.servizio_id = sv.id
-             LEFT JOIN profili pr ON pr.id = p.cliente_id
+             LEFT JOIN profili pr ON pr.id = p.cliente_uuid
              WHERE p.sede_id = $1 AND p.data = $2`;
         const params = [sede_id, dataQuery];
 
