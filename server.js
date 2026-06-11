@@ -22,6 +22,11 @@ app.listen(process.env.PORT, () => {
     console.log(`Server avviato sulla porta ${process.env.PORT}`);
 });
 
+// Assicura che la colonna telefono esista in profili (idempotente)
+pool.query("ALTER TABLE profili ADD COLUMN IF NOT EXISTS telefono TEXT").catch(err => {
+    console.log('DB init telefono:', err.message);
+});
+
 // ==========================================
 // MIDDLEWARE AUTH
 // ==========================================
@@ -48,7 +53,7 @@ const verificaToken = async (req, res, next) => {
         const uuid = userData.id;
 
         const result = await pool.query(
-            `SELECT p.id, p.ruolo, p.nome, p.cognome, b.id AS barbiere_id
+            `SELECT p.id, p.ruolo, p.nome, p.cognome, p.telefono, b.id AS barbiere_id
              FROM profili p
              LEFT JOIN barbieri b ON b.profilo_id = p.id
              WHERE p.id = $1`,
@@ -60,12 +65,21 @@ const verificaToken = async (req, res, next) => {
         }
 
         const u = result.rows[0];
+
+        // Auto-popola telefono da Supabase user_metadata se mancante in profili
+        const telefonoMeta = userData.user_metadata?.telefono || null;
+        const telefono = u.telefono || telefonoMeta;
+        if (!u.telefono && telefono) {
+            pool.query('UPDATE profili SET telefono = $1 WHERE id = $2', [telefono, uuid]).catch(() => {});
+        }
+
         req.utente = {
             id: uuid,
             uuid,
             barbiere_id: u.barbiere_id,
             nome: u.nome,
             cognome: u.cognome,
+            telefono,
             ruolo: u.ruolo,
         };
         next();
@@ -296,9 +310,9 @@ app.patch('/api/auth/profilo', verificaToken, async (req, res) => {
     const { nome, cognome, telefono } = req.body;
     try {
         if (req.utente.ruolo === 'cliente') {
-            await pool.query('UPDATE clienti SET nome=$1, cognome=$2, telefono=$3 WHERE id=$4', [nome, cognome, telefono, req.utente.id]);
+            await pool.query('UPDATE profili SET nome=$1, cognome=$2, telefono=$3 WHERE id=$4', [nome, cognome, telefono, req.utente.id]);
             // Aggiorna anche il nome nelle prenotazioni future
-            await pool.query('UPDATE prenotazioni SET cliente_nome=$1 WHERE cliente_id=$2 AND stato=\'attivo\'', [nome, req.utente.id]);
+            await pool.query("UPDATE prenotazioni SET cliente_nome=$1 WHERE cliente_id=$2 AND stato='attivo'", [nome, req.utente.id]);
         } else {
             await pool.query('UPDATE barbieri SET nome=$1 WHERE id=$2', [nome, req.utente.id]);
         }
@@ -600,12 +614,14 @@ app.get('/api/admin/prenotazioni', verificaToken, soloAdmin, async (req, res) =>
 
     try {
         let query = `
-            SELECT p.id, p.data, p.ora, p.stato, p.cliente_nome, p.servizio_id,
+            SELECT p.id, p.data, p.ora, p.stato, p.cliente_nome, p.servizio_id, p.cliente_id,
              b.nome AS barbiere_nome, b.id AS barbiere_id,
-             sv.nome AS servizio_nome, sv.prezzo AS servizio_prezzo, sv.durata_minuti
+             sv.nome AS servizio_nome, sv.prezzo AS servizio_prezzo, sv.durata_minuti,
+             pr.telefono AS cliente_telefono
              FROM prenotazioni p
              JOIN barbieri b ON p.barbiere_id = b.id
              JOIN servizi sv ON p.servizio_id = sv.id
+             LEFT JOIN profili pr ON pr.id = p.cliente_id
              WHERE p.sede_id = $1 AND p.data = $2`;
         const params = [sede_id, dataQuery];
 
