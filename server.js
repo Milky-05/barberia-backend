@@ -91,6 +91,14 @@ cron.schedule('*/10 * * * *', async () => {
         const scaduti = await pool.query("DELETE FROM prenotazioni WHERE data = CURRENT_DATE AND ora < CURRENT_TIME AND stato = 'attivo'");
         const totale = (cancellati.rowCount || 0) + (passati.rowCount || 0) + (scaduti.rowCount || 0);
         if (totale > 0) console.log(`Pulizia: eliminati ${totale} appuntamenti`);
+        // Riattiva barbieri il cui permesso è scaduto
+        const riattivati = await pool.query(
+            `UPDATE barbieri SET assente = false, motivo_assenza = NULL
+             WHERE assente = true AND motivo_assenza LIKE 'permesso:%'
+             AND SUBSTRING(motivo_assenza FROM 10)::timestamptz < NOW()
+             RETURNING nome`
+        );
+        if (riattivati.rowCount > 0) console.log(`Permessi scaduti: riattivati ${riattivati.rowCount} barbieri`);
     } catch (err) {
         console.error('Errore pulizia:', err);
     }
@@ -641,11 +649,11 @@ app.get('/api/admin/barbieri', verificaToken, soloAdmin, async (req, res) => {
         let result;
         if (sede_id) {
             result = await pool.query(
-                `SELECT DISTINCT b.id, b.nome, b.tipo, b.assente FROM barbieri b 
+                `SELECT DISTINCT b.id, b.nome, b.tipo, b.assente, b.motivo_assenza FROM barbieri b
                  JOIN turni_rotazione t ON b.id=t.barbiere_id WHERE t.sede_id=$1 ORDER BY b.nome`, [sede_id]
             );
         } else {
-            result = await pool.query('SELECT id, nome, tipo, assente FROM barbieri ORDER BY nome');
+            result = await pool.query('SELECT id, nome, tipo, assente, motivo_assenza FROM barbieri ORDER BY nome');
         }
         res.json(result.rows);
     } catch (err) {
@@ -714,6 +722,22 @@ app.post('/api/admin/barbiere-assente', verificaToken, soloAdmin, async (req, re
     } catch (err) {
         console.error("Errore assenza:", err);
         res.status(500).json({ error: "Errore nella gestione dell'assenza" });
+    }
+});
+
+// PERMESSO TEMPORANEO BARBIERE (senza cancellare appuntamenti)
+app.post('/api/admin/barbiere-permesso', verificaToken, soloAdmin, async (req, res) => {
+    const { barbiere_id, ore } = req.body;
+    if (!barbiere_id || !ore) return res.status(400).json({ error: "Manca barbiere_id o ore" });
+    try {
+        const finePermesso = new Date(Date.now() + ore * 60 * 60 * 1000).toISOString();
+        await pool.query(
+            'UPDATE barbieri SET assente = true, motivo_assenza = $1 WHERE id = $2',
+            [`permesso:${finePermesso}`, barbiere_id]
+        );
+        res.json({ success: true, messaggio: `Barbiere in permesso per ${ore} ${ore === 1 ? 'ora' : 'ore'}` });
+    } catch (err) {
+        res.status(500).json({ error: "Errore nella gestione del permesso" });
     }
 });
 
