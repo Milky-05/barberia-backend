@@ -537,6 +537,13 @@ app.get('/api/prenotazioni/miei', verificaToken, async (req, res) => {
     const cliente_uuid = req.utente.uuid;
 
     try {
+        // Rimuovi appuntamenti passati dal DB (pulizia spazio)
+        await pool.query(
+            `DELETE FROM prenotazioni WHERE cliente_uuid = $1 AND stato = 'attivo'
+             AND (data < CURRENT_DATE OR (data = CURRENT_DATE AND ora < CURRENT_TIME))`,
+            [cliente_uuid]
+        );
+
         let query = `
             SELECT p.id, p.data, p.ora, p.stato, p.sede_id,
                     s.nome AS sede_nome, b.nome AS barbiere_nome,
