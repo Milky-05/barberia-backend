@@ -757,8 +757,13 @@ app.get('/api/admin/barbieri', verificaToken, soloAdmin, async (req, res) => {
         let result;
         if (sede_id) {
             result = await pool.query(
-                `SELECT DISTINCT b.id, b.nome, b.tipo, b.assente, b.motivo_assenza FROM barbieri b
-                 JOIN turni_rotazione t ON b.id=t.barbiere_id WHERE t.sede_id=$1 ORDER BY b.nome`, [sede_id]
+                `SELECT b.id, b.nome, b.tipo, b.assente, b.motivo_assenza,
+                        array_agg(t.giorno_settimana ORDER BY t.giorno_settimana) AS giorni_lavoro
+                 FROM barbieri b
+                 JOIN turni_rotazione t ON b.id=t.barbiere_id
+                 WHERE t.sede_id=$1
+                 GROUP BY b.id, b.nome, b.tipo, b.assente, b.motivo_assenza
+                 ORDER BY b.nome`, [sede_id]
             );
         } else {
             result = await pool.query('SELECT id, nome, tipo, assente, motivo_assenza FROM barbieri ORDER BY nome');
