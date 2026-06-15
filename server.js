@@ -33,6 +33,15 @@ pool.query("ALTER TABLE prenotazioni ADD COLUMN IF NOT EXISTS cliente_telefono T
 // ==========================================
 // MIDDLEWARE AUTH
 // ==========================================
+// Cache token → utente (evita di chiamare Supabase ad ogni richiesta e bypassa il rate limit)
+const tokenCache = new Map(); // token → { utente, scadenza }
+setInterval(() => {
+    const adesso = Date.now();
+    for (const [k, v] of tokenCache) {
+        if (v.scadenza < adesso) tokenCache.delete(k);
+    }
+}, 60 * 1000); // pulizia ogni minuto
+
 const verificaToken = async (req, res, next) => {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -40,6 +49,13 @@ const verificaToken = async (req, res, next) => {
     }
     try {
         const token = authHeader.split(' ')[1];
+
+        // Controlla cache prima di chiamare Supabase
+        const cached = tokenCache.get(token);
+        if (cached && cached.scadenza > Date.now()) {
+            req.utente = cached.utente;
+            return next();
+        }
 
         const risposta = await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, {
             headers: {
@@ -75,7 +91,7 @@ const verificaToken = async (req, res, next) => {
             pool.query('UPDATE profili SET telefono = $1 WHERE id = $2', [telefono, uuid]).catch(() => {});
         }
 
-        req.utente = {
+        const utente = {
             id: uuid,
             uuid,
             barbiere_id: u.barbiere_id,
@@ -84,6 +100,11 @@ const verificaToken = async (req, res, next) => {
             telefono,
             ruolo: u.ruolo,
         };
+
+        // Salva in cache per 5 minuti (il token Supabase dura 1 ora, quindi è sicuro)
+        tokenCache.set(token, { utente, scadenza: Date.now() + 5 * 60 * 1000 });
+
+        req.utente = utente;
         next();
     } catch (err) {
         return res.status(401).json({ error: "Token non valido o scaduto" });
