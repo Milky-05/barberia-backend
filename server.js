@@ -41,19 +41,15 @@ const verificaToken = async (req, res, next) => {
     try {
         const token = authHeader.split(' ')[1];
 
-        const risposta = await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, {
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'apikey': process.env.SUPABASE_ANON_KEY,
-            }
-        });
-
-        if (!risposta.ok) {
+        // Verifica JWT localmente (nessuna chiamata HTTP a Supabase — 100x più veloce e scalabile)
+        let decoded;
+        try {
+            decoded = jwt.verify(token, process.env.SUPABASE_JWT_SECRET);
+        } catch (e) {
             return res.status(401).json({ error: "Token non valido o scaduto" });
         }
-
-        const userData = await risposta.json();
-        const uuid = userData.id;
+        const uuid = decoded.sub;
+        const userMetadata = decoded.user_metadata || {};
 
         const result = await pool.query(
             `SELECT p.id, p.ruolo, p.nome, p.cognome, p.telefono, b.id AS barbiere_id
@@ -69,8 +65,7 @@ const verificaToken = async (req, res, next) => {
 
         const u = result.rows[0];
 
-        // Auto-popola telefono da Supabase user_metadata se mancante in profili
-        const telefonoMeta = userData.user_metadata?.telefono || null;
+        const telefonoMeta = userMetadata.telefono || null;
         const telefono = u.telefono || telefonoMeta;
         if (!u.telefono && telefono) {
             pool.query('UPDATE profili SET telefono = $1 WHERE id = $2', [telefono, uuid]).catch(() => {});
@@ -542,12 +537,6 @@ app.get('/api/prenotazioni/miei', verificaToken, async (req, res) => {
     const cliente_uuid = req.utente.uuid;
 
     try {
-        await pool.query("DELETE FROM prenotazioni WHERE cliente_uuid = $1 AND stato = 'cancellato'", [cliente_uuid]);
-        await pool.query(
-            "DELETE FROM prenotazioni WHERE cliente_uuid = $1 AND stato = 'attivo' AND (data < CURRENT_DATE OR (data = CURRENT_DATE AND ora < CURRENT_TIME))",
-            [cliente_uuid]
-        );
-
         let query = `
             SELECT p.id, p.data, p.ora, p.stato, p.sede_id,
                     s.nome AS sede_nome, b.nome AS barbiere_nome,
@@ -556,7 +545,8 @@ app.get('/api/prenotazioni/miei', verificaToken, async (req, res) => {
              JOIN sedi s ON p.sede_id = s.id
              JOIN barbieri b ON p.barbiere_id = b.id
              JOIN servizi sv ON p.servizio_id = sv.id
-             WHERE p.cliente_uuid = $1 AND p.stato = 'attivo'`;
+             WHERE p.cliente_uuid = $1 AND p.stato = 'attivo'
+             AND (p.data > CURRENT_DATE OR (p.data = CURRENT_DATE AND p.ora >= CURRENT_TIME))`;
         const params = [cliente_uuid];
 
         if (sede_id) { query += ` AND p.sede_id = $2`; params.push(sede_id); }
