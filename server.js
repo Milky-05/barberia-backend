@@ -125,8 +125,7 @@ cron.schedule('*/10 * * * *', async () => {
     try {
         const cancellati = await pool.query("DELETE FROM prenotazioni WHERE stato = 'cancellato'");
         const passati = await pool.query("DELETE FROM prenotazioni WHERE data < CURRENT_DATE AND stato = 'attivo'");
-        const scaduti = await pool.query("DELETE FROM prenotazioni WHERE data = CURRENT_DATE AND ora < CURRENT_TIME AND stato = 'attivo'");
-        const totale = (cancellati.rowCount || 0) + (passati.rowCount || 0) + (scaduti.rowCount || 0);
+        const totale = (cancellati.rowCount || 0) + (passati.rowCount || 0);
         if (totale > 0) console.log(`Pulizia: eliminati ${totale} appuntamenti`);
 
         // Riattiva barbieri con assenza/permesso scaduto (formato JSON)
@@ -562,13 +561,6 @@ app.get('/api/prenotazioni/miei', verificaToken, async (req, res) => {
     const cliente_uuid = req.utente.uuid;
 
     try {
-        // Rimuovi appuntamenti passati dal DB (pulizia spazio)
-        await pool.query(
-            `DELETE FROM prenotazioni WHERE cliente_uuid = $1 AND stato = 'attivo'
-             AND (data < CURRENT_DATE OR (data = CURRENT_DATE AND ora < CURRENT_TIME))`,
-            [cliente_uuid]
-        );
-
         let query = `
             SELECT p.id, p.data, p.ora, p.stato, p.sede_id,
                     s.nome AS sede_nome, b.nome AS barbiere_nome,
