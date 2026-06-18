@@ -878,6 +878,15 @@ app.post('/api/admin/barbiere-permesso', verificaToken, soloAdmin, async (req, r
             [isOra, JSON.stringify(infoObj), barbiere_id]
         );
 
+        // Cancella gli appuntamenti attivi durante il periodo di permesso
+        const oraFineStr = `${String(fineDate.getHours()).padStart(2,'0')}:${String(fineDate.getMinutes()).padStart(2,'0')}`;
+        await pool.query(
+            `UPDATE prenotazioni SET stato = 'cancellato'
+             WHERE barbiere_id = $1 AND data = $2 AND stato = 'attivo'
+             AND ora >= $3 AND ora < $4`,
+            [barbiere_id, dataI, oraI, oraFineStr]
+        );
+
         const ore = Math.floor(minuti / 60);
         const min = minuti % 60;
         const durata = ore > 0 ? `${ore}h${min > 0 ? ` ${min}min` : ''}` : `${min}min`;
