@@ -426,12 +426,34 @@ app.get('/api/barbieri-disponibili', async (req, res) => {
         if (giorno_settimana === 0 || giorno_settimana === 1) return res.json({ messaggio: "Il negozio è chiuso di Domenica e Lunedì", barbieri: [] });
 
         const result = await pool.query(
-            `SELECT b.id, b.nome FROM barbieri b
+            `SELECT b.id, b.nome, b.assente, b.motivo_assenza FROM barbieri b
              JOIN turni_rotazione t ON b.id = t.barbiere_id
-             WHERE t.sede_id = $1 AND t.giorno_settimana = $2 AND b.assente = false`,
+             WHERE t.sede_id = $1 AND t.giorno_settimana = $2`,
             [sede_id, giorno_settimana]
         );
-        res.json(result.rows);
+        // Calcola se un barbiere è disabilitato per la data richiesta (assente attivo o programmato)
+        const rows = result.rows.map((b) => {
+            let disabilitato = false;
+            if (b.assente) {
+                disabilitato = true;
+            } else if (b.motivo_assenza && b.motivo_assenza.startsWith('{')) {
+                try {
+                    const info = JSON.parse(b.motivo_assenza);
+                    if (info.stato === 'programmato') {
+                        if (info.tipo === 'assente') {
+                            disabilitato = data >= info.inizio && (!info.fine || data <= info.fine);
+                        } else if (info.tipo === 'permesso') {
+                            // Per il permesso programmato controlliamo solo la data (non l'ora)
+                            const permDate = new Date(info.inizio);
+                            const permDateStr = `${permDate.getFullYear()}-${String(permDate.getMonth()+1).padStart(2,'0')}-${String(permDate.getDate()).padStart(2,'0')}`;
+                            disabilitato = permDateStr === data;
+                        }
+                    }
+                } catch {}
+            }
+            return { id: b.id, nome: b.nome, assente: b.assente, disabilitato };
+        });
+        res.json(rows);
     } catch (err) {
         res.status(500).json({ error: "Errore durante la ricerca dei barbieri" });
     }
