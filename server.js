@@ -91,12 +91,21 @@ const verificaToken = async (req, res, next) => {
             pool.query('UPDATE profili SET telefono = $1 WHERE id = $2', [telefono, uuid]).catch(() => {});
         }
 
+        // Se profili non ha nome ma user_metadata sì, sincronizza (cliente appena registrato)
+        let nome = u.nome;
+        let cognome = u.cognome;
+        if (!nome && userData.user_metadata?.nome) {
+            nome = userData.user_metadata.nome;
+            cognome = userData.user_metadata.cognome || null;
+            pool.query('UPDATE profili SET nome=$1, cognome=$2 WHERE id=$3', [nome, cognome, uuid]).catch(() => {});
+        }
+
         const utente = {
             id: uuid,
             uuid,
             barbiere_id: u.barbiere_id,
-            nome: u.nome,
-            cognome: u.cognome,
+            nome,
+            cognome,
             telefono,
             ruolo: u.ruolo,
         };
