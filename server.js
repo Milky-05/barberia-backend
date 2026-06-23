@@ -561,7 +561,7 @@ app.get('/api/orari-disponibili', async (req, res) => {
 // Crea prenotazione (ora richiede auth)
 app.post('/api/prenotazioni', verificaToken, async (req, res) => {
     const { sede_id, barbiere_id, data, ora, servizio_id } = req.body;
-    const cliente_nome = req.utente.nome;
+    const cliente_nome = [req.utente.nome, req.utente.cognome].filter(Boolean).join(' ').trim() || req.utente.nome;
 
     if (!sede_id || !barbiere_id || !data || !ora || !servizio_id) {
         return res.status(400).json({ error: "Mancano campi obbligatori" });
@@ -662,7 +662,11 @@ app.get('/api/admin/prenotazioni', verificaToken, soloAdmin, async (req, res) =>
 
     try {
         let query = `
-            SELECT p.id, p.data, p.ora, p.stato, p.cliente_nome, p.servizio_id, p.cliente_uuid,
+            SELECT p.id, p.data, p.ora, p.stato, p.servizio_id, p.cliente_uuid,
+             CASE WHEN pr.nome IS NOT NULL
+               THEN TRIM(pr.nome || ' ' || COALESCE(pr.cognome, ''))
+               ELSE p.cliente_nome
+             END AS cliente_nome,
              b.nome AS barbiere_nome, b.id AS barbiere_id,
              sv.nome AS servizio_nome, sv.prezzo AS servizio_prezzo, sv.durata_minuti,
              COALESCE(p.cliente_telefono, pr.telefono) AS cliente_telefono
@@ -698,10 +702,17 @@ app.get('/api/admin/prenotazioni/settimana', verificaToken, soloAdmin, async (re
 
     try {
         const result = await pool.query(
-            `SELECT p.id, p.data, p.ora, p.stato, p.cliente_nome, p.servizio_id,
+            `SELECT p.id, p.data, p.ora, p.stato, p.servizio_id, p.cliente_uuid,
+             CASE WHEN pr.nome IS NOT NULL
+               THEN TRIM(pr.nome || ' ' || COALESCE(pr.cognome, ''))
+               ELSE p.cliente_nome
+             END AS cliente_nome,
              b.nome AS barbiere_nome, b.id AS barbiere_id,
              sv.nome AS servizio_nome, sv.prezzo AS servizio_prezzo, sv.durata_minuti
-             FROM prenotazioni p JOIN barbieri b ON p.barbiere_id = b.id JOIN servizi sv ON p.servizio_id = sv.id
+             FROM prenotazioni p
+             JOIN barbieri b ON p.barbiere_id = b.id
+             JOIN servizi sv ON p.servizio_id = sv.id
+             LEFT JOIN profili pr ON pr.id = p.cliente_uuid
              WHERE p.sede_id = $1 AND p.data BETWEEN $2 AND $3 ORDER BY p.data ASC, p.ora ASC`,
             [sede_id, inizio.toISOString().split('T')[0], fine.toISOString().split('T')[0]]
         );
