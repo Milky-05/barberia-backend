@@ -30,6 +30,30 @@ pool.query("ALTER TABLE prenotazioni ADD COLUMN IF NOT EXISTS cliente_telefono T
     console.log('DB init prenotazioni.cliente_telefono:', err.message);
 });
 
+// Pulizia duplicati + vincolo unicità slot (previene race condition nelle prenotazioni)
+(async () => {
+    try {
+        // Rimuove eventuali doppioni mantenendo la prenotazione con id più alto (più recente)
+        await pool.query(`
+            DELETE FROM prenotazioni
+            WHERE stato = 'attivo' AND id NOT IN (
+                SELECT MAX(id) FROM prenotazioni
+                WHERE stato = 'attivo'
+                GROUP BY barbiere_id, data, ora
+            )
+        `);
+        // Crea unique partial index: impedisce che lo stesso slot venga prenotato due volte
+        await pool.query(`
+            CREATE UNIQUE INDEX IF NOT EXISTS uniq_slot_attivo
+            ON prenotazioni (barbiere_id, data, ora)
+            WHERE stato = 'attivo'
+        `);
+        console.log('DB: vincolo unicità slot prenotazioni OK');
+    } catch (e) {
+        console.log('DB init unicità slot:', e.message);
+    }
+})();
+
 // ==========================================
 // MIDDLEWARE AUTH
 // ==========================================
@@ -567,22 +591,33 @@ app.post('/api/prenotazioni', verificaToken, async (req, res) => {
         return res.status(400).json({ error: "Mancano campi obbligatori" });
     }
 
+    const client = await pool.connect();
     try {
-        const check = await pool.query(
+        await client.query('BEGIN');
+        const check = await client.query(
             "SELECT id FROM prenotazioni WHERE barbiere_id = $1 AND data = $2 AND ora = $3 AND stato = 'attivo'",
             [barbiere_id, data, ora]
         );
-        if (check.rows.length > 0) return res.status(409).json({ error: "Questo orario è già prenotato!" });
-
-        const result = await pool.query(
+        if (check.rows.length > 0) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ error: "Questo orario è già prenotato!" });
+        }
+        const result = await client.query(
             `INSERT INTO prenotazioni (sede_id, barbiere_id, cliente_nome, cliente_uuid, data, ora, servizio_id)
              VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
             [sede_id, barbiere_id, cliente_nome, req.utente.ruolo === 'cliente' ? req.utente.uuid : null, data, ora, servizio_id]
         );
+        await client.query('COMMIT');
         res.json({ success: true, prenotazione: result.rows[0] });
     } catch (err) {
+        await client.query('ROLLBACK');
+        if (err.code === '23505') {
+            return res.status(409).json({ error: "Questo orario è già prenotato!" });
+        }
         console.error("Errore salvataggio:", err);
         res.status(500).json({ error: "Errore nel salvataggio della prenotazione" });
+    } finally {
+        client.release();
     }
 });
 
@@ -728,20 +763,31 @@ app.post('/api/admin/prenotazioni', verificaToken, soloAdmin, async (req, res) =
     if (!sede_id || !barbiere_id || !cliente_nome || !data || !ora || !servizio_id) {
         return res.status(400).json({ error: "Mancano campi obbligatori" });
     }
+    const client = await pool.connect();
     try {
-        const check = await pool.query(
+        await client.query('BEGIN');
+        const check = await client.query(
             "SELECT id FROM prenotazioni WHERE barbiere_id = $1 AND data = $2 AND ora = $3 AND stato = 'attivo'",
             [barbiere_id, data, ora]
         );
-        if (check.rows.length > 0) return res.status(409).json({ error: "Orario già prenotato!" });
-
-        const result = await pool.query(
+        if (check.rows.length > 0) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ error: "Orario già prenotato!" });
+        }
+        const result = await client.query(
             `INSERT INTO prenotazioni (sede_id, barbiere_id, cliente_nome, cliente_telefono, data, ora, servizio_id) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
             [sede_id, barbiere_id, cliente_nome, cliente_telefono || null, data, ora, servizio_id]
         );
+        await client.query('COMMIT');
         res.json({ success: true, prenotazione: result.rows[0] });
     } catch (err) {
+        await client.query('ROLLBACK');
+        if (err.code === '23505') {
+            return res.status(409).json({ error: "Orario già prenotato!" });
+        }
         res.status(500).json({ error: "Errore nel salvataggio" });
+    } finally {
+        client.release();
     }
 });
 
